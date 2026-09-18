@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Résultats quiz formation</title>
+<style>
+:root{
+  --bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--muted:#6b6a66;--line:#e4e2dc;
+  --accent:#c8102e;--ok:#1f7a4d;--ko:#b3261e;--bar:#e9e7e1;--mid:#b7791f;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#151514;--card:#1f1f1d;--ink:#eeede9;--muted:#a3a19b;--line:#33322f;
+  --accent:#ff5a6e;--ok:#4cc38a;--ko:#ff7a70;--bar:#2c2b28;--mid:#e0a54a;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:28px 16px 8px;max-width:1100px;margin:auto}
+header small{color:var(--accent);font-weight:600;letter-spacing:.08em;text-transform:uppercase;font-size:12px}
+h1{margin:4px 0 0;font-size:26px}
+main{max-width:1100px;margin:auto;padding:8px 16px 48px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-top:16px}
+form{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+label{display:flex;flex-direction:column;font-size:13px;color:var(--muted);gap:4px;flex:1 1 180px}
+input{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+button{font:inherit;font-weight:600;padding:10px 18px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+#msg{margin-top:12px;color:var(--ko);min-height:1.5em}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:14px}
+.kpi b{display:block;font-size:26px}
+.kpi span{color:var(--muted);font-size:13px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h2{font-size:18px;margin:0}
+.tablewrap{overflow-x:auto;margin-top:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;cursor:pointer}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.up{color:var(--ok);font-weight:600}.down{color:var(--ko);font-weight:600}
+.q{margin:10px 0}
+.q .t{display:flex;justify-content:space-between;gap:12px;font-size:14px}
+.q .t span:last-child{font-variant-numeric:tabular-nums;font-weight:600}
+.track{height:8px;background:var(--bar);border-radius:4px;margin-top:4px;overflow:hidden}
+.fill{height:100%;border-radius:4px}
+.tabs{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.tabs button{background:transparent;color:var(--muted);border:1px solid var(--line);padding:6px 14px}
+.tabs button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.muted{color:var(--muted);font-size:13px}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <small>Académie SAV</small>
+  <h1>Résultats des quiz de formation</h1>
+</header>
+<main>
+  <section class="card">
+    <form id="f" autocomplete="off">
+      <label>N° de session<input id="session" required placeholder="ex. 2025-014"></label>
+      <label>Code d'accès<input id="code" required placeholder="10 caractères" autocapitalize="characters"></label>
+      <button type="submit">Afficher</button>
+    </form>
+    <div id="msg"></div>
+  </section>
+  <div id="res" class="hidden"></div>
+</main>
+<script src="sessions.js"></script>
+<script>
+const SALT_NOM_FICHIER = "academie-sav-quiz";   // identique à build.py
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+const clean = s => s.replace(/\s+/g, "").toUpperCase();
+
+async function sha256hex(t){
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2,"0")).join("");
+}
+async function decrypt(pkg, code){
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(code), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({name:"PBKDF2", salt:b64(pkg.salt), iterations:pkg.iter, hash:"SHA-256"},
+    base, {name:"AES-GCM", length:256}, false, ["decrypt"]);
+  const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:b64(pkg.iv)}, key, b64(pkg.data));
+  return JSON.parse(new TextDecoder().decode(pt));
+}
+
+$("#f").addEventListener("submit", async e => {
+  e.preventDefault();
+  const s = clean($("#session").value), code = clean($("#code").value);
+  $("#msg").textContent = "Chargement…"; $("#res").classList.add("hidden");
+  try{
+    const id = (await sha256hex(`${SALT_NOM_FICHIER}:${s}`)).slice(0,32);
+    const pkg = (window.QUIZ_DATA || {})[id];
+    if(!pkg) throw new Error("introuvable");
+    let data;
+    try{ data = await decrypt(pkg, code); }
+    catch{ throw new Error("code"); }
+    $("#msg").textContent = "";
+    render(data);
+  }catch(err){
+    $("#msg").textContent = "Session introuvable ou code d'accès incorrect.";
+  }
+});
+
+let current;
+function personKey(p){ return p.email || p.nom.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/\s+/g," ").trim(); }
+
+function render(d){
+  current = d;
+  const quiz = d.quiz;
+  // fusion des stagiaires sur tous les quiz de la session
+  const people = new Map();
+  quiz.forEach((q, qi) => q.reponses.forEach(p => {
+    const k = personKey(p);
+    if(!people.has(k)) people.set(k, {nom:p.nom, email:p.email, infos:{}, scores:{}});
+    const e = people.get(k);
+    Object.assign(e.infos, p.infos);
+    e.scores[qi] = pct(p.total, p.max);
+  }));
+  const list = [...people.values()];
+  const infoKeys = [...new Set(list.flatMap(p => Object.keys(p.infos)))];
+  const pair = quiz.length >= 2 ? [0, quiz.length - 1] : null;
+  const avg = qi => { const v = list.map(p => p.scores[qi]).filter(x => x != null); return v.length ? Math.round(v.reduce((a,b)=>a+b,0)/v.length) : null; };
+  const dates = [...new Set(quiz.flatMap(q => q.reponses.map(r => r.date)).filter(Boolean))];
+
+  let kpis = `<div class="kpi"><b>${list.length}</b><span>stagiaires</span></div>`;
+  quiz.forEach((q, qi) => kpis += `<div class="kpi"><b>${avg(qi) ?? "–"} %</b><span>moyenne ${esc(q.quiz)}</span></div>`);
+  if(pair){
+    const both = list.filter(p => p.scores[pair[0]] != null && p.scores[pair[1]] != null);
+    const g = both.length ? Math.round(both.reduce((a,p)=>a + p.scores[pair[1]] - p.scores[pair[0]], 0) / both.length) : null;
+    const up = both.filter(p => p.scores[pair[1]] > p.scores[pair[0]]).length;
+    kpis += `<div class="kpi"><b class="${g>0?"up":g<0?"down":""}">${g==null?"–":(g>0?"+":"")+g+" pts"}</b><span>progression moyenne</span></div>`;
+    kpis += `<div class="kpi"><b>${up}/${both.length}</b><span>stagiaires en progression</span></div>`;
+  }
+
+  let head = `<th data-k="nom">Stagiaire</th>` + infoKeys.map(k => `<th data-k="i:${esc(k)}">${esc(k)}</th>`).join("")
+    + quiz.map((q,qi) => `<th data-k="s:${qi}">${esc(q.quiz)}</th>`).join("") + (pair ? `<th data-k="g">Écart</th>` : "");
+
+  const tabs = quiz.map((q,qi) => `<button class="${qi?"":"on"}" data-t="${qi}">${esc(q.quiz)}</button>`).join("");
+
+  $("#res").innerHTML = `
+  <section class="card">
+    <div class="row"><div><h2>Session ${esc(d.session)}</h2>
+      <div class="muted">${esc(quiz[0].formation)}${dates.length ? " · " + dates.join(", ") : ""} · données du ${esc(d.genere_le)}</div></div>
+      <button class="ghost" id="csv">Exporter en CSV</button></div>
+    <div class="kpis" style="margin-top:16px">${kpis}</div>
+  </section>
+  <section class="card">
+    <h2>Stagiaires</h2>
+    <div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody id="tb"></tbody></table></div>
+    <p class="muted">Cliquer sur un en-tête pour trier. « – » : quiz non rempli.</p>
+  </section>
+  <section class="card">
+    <h2>Taux de bonnes réponses par question</h2>
+    <div class="tabs">${tabs}</div>
+    <div id="qs"></div>
+  </section>`;
+  $("#res").classList.remove("hidden");
+
+  let sortKey = pair ? "g" : "nom", asc = false;
+  const val = (p, k) => k === "nom" ? p.nom.toLowerCase()
+    : k === "g" ? (p.scores[pair[1]] ?? NaN) - (p.scores[pair[0]] ?? NaN)
+    : k.startsWith("s:") ? p.scores[+k.slice(2)] ?? -1 : (p.infos[k.slice(2)] || "").toLowerCase();
+  function drawTable(){
+    const rows = [...list].sort((a,b) => { let x = val(a,sortKey), y = val(b,sortKey);
+      if(Number.isNaN(x)) x = -999; if(Number.isNaN(y)) y = -999;
+      return (x < y ? -1 : x > y ? 1 : 0) * (asc ? 1 : -1); });
+    $("#tb").innerHTML = rows.map(p => {
+      const g = pair && p.scores[pair[0]] != null && p.scores[pair[1]] != null ? p.scores[pair[1]] - p.scores[pair[0]] : null;
+      return `<tr><td>${esc(p.nom)}<div class="muted">${esc(p.email)}</div></td>`
+        + infoKeys.map(k => `<td>${esc(p.infos[k] || "")}</td>`).join("")
+        + quiz.map((q,qi) => `<td class="n">${p.scores[qi] != null ? p.scores[qi] + " %" : "–"}</td>`).join("")
+        + (pair ? `<td class="n ${g>0?"up":g<0?"down":""}">${g == null ? "–" : (g>0?"+":"") + g}</td>` : "") + `</tr>`;
+    }).join("");
+  }
+  document.querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const k = th.dataset.k; asc = sortKey === k ? !asc : k === "nom"; sortKey = k; drawTable(); });
+  drawTable();
+
+  function drawQ(qi){
+    const q = quiz[qi], n = q.reponses.length;
+    const stats = q.questions.map((t, i) => {
+      const max = q.questions_max[i];
+      const ok = q.reponses.filter(r => max > 0 && r.points[i] >= max).length;
+      return {t, rate: pct(ok, n)};
+    });
+    $("#qs").innerHTML = (n ? "" : `<p class="muted">Aucune réponse.</p>`) + stats.map(s => {
+      const c = s.rate >= 75 ? "var(--ok)" : s.rate >= 50 ? "var(--mid)" : "var(--ko)";
+      return `<div class="q"><div class="t"><span>${esc(s.t)}</span><span>${s.rate} %</span></div>
+        <div class="track"><div class="fill" style="width:${s.rate}%;background:${c}"></div></div></div>`;
+    }).join("") + `<p class="muted">${n} réponse(s). Vert ≥ 75 %, orange ≥ 50 %, rouge &lt; 50 %.</p>`;
+    document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", +b.dataset.t === qi));
+  }
+  document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => drawQ(+b.dataset.t));
+  drawQ(0);
+
+  $("#csv").onclick = () => {
+    const cols = ["Stagiaire","Email",...infoKeys,...quiz.map(q => q.quiz + " (%)"),...(pair?["Écart (pts)"]:[])];
+    const lines = [cols, ...list.map(p => [p.nom, p.email, ...infoKeys.map(k => p.infos[k]||""),
+      ...quiz.map((q,qi) => p.scores[qi] ?? ""),
+      ...(pair ? [p.scores[pair[0]] != null && p.scores[pair[1]] != null ? p.scores[pair[1]] - p.scores[pair[0]] : ""] : [])])];
+    const csv = "﻿" + lines.map(l => l.map(v => `"${String(v).replace(/"/g,'""')}"`).join(";")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
+    a.download = `resultats_session_${d.session}.csv`; a.click();
+  };
+}
+</script>
+</body>
+</html>
