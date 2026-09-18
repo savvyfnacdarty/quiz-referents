@@ -60,7 +60,7 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
   <section class="card">
     <form id="f" autocomplete="off">
       <label>N° de session<input id="session" placeholder="ex. 4175"></label>
-      <label>Code d'accès<input id="code" required placeholder="10 caractères" autocapitalize="characters"></label>
+      <label>Code d'accès<input id="code" required placeholder="ex. ABCDE-FGHJK" autocapitalize="characters"></label>
       <button type="submit">Afficher</button>
     </form>
     <div id="msg"></div>
@@ -76,6 +76,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
 const clean = s => s.replace(/\s+/g, "").toUpperCase();
+const cleanCode = s => s.replace(/[\s-]+/g, "").toUpperCase();
 
 async function sha256hex(t){
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
@@ -137,7 +138,7 @@ function showAdmin(idx, code){
 
 $("#f").addEventListener("submit", async e => {
   e.preventDefault();
-  const s = clean($("#session").value), code = clean($("#code").value);
+  const s = clean($("#session").value), code = cleanCode($("#code").value);
   if(!code){ $("#msg").textContent = "Saisis le code d'accès."; return; }
   $("#msg").textContent = "Chargement…"; $("#res").classList.add("hidden"); $("#admin").classList.add("hidden");
   const idx = await tryAdmin(code);
