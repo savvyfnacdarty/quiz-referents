@@ -49,6 +49,12 @@ td.n{text-align:right;font-variant-numeric:tabular-nums}
 .tabs button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .muted{color:var(--muted);font-size:13px}
 .hidden{display:none}
+.colmenu{position:absolute;z-index:50;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.18);padding:8px;min-width:180px;font-size:13px}
+.colmenu .cm-list{max-height:240px;overflow:auto;margin:6px 0}
+.colmenu label{display:flex;gap:6px;align-items:center;padding:2px 0;white-space:nowrap;cursor:pointer}
+.colmenu input{padding:0}
+.colmenu .cm-bot{text-align:right}
+
 
 /* ---------- export PDF (impression) ---------- */
 #print{display:none}
@@ -176,19 +182,66 @@ async function tryAdmin(code){
   try{ return await unlock(pkg, code); }catch{ return null; }
 }
 function showAdmin(idx, code){
-  const rows = idx.sessions.map(x => `<tr data-s="${esc(x.session)}" style="cursor:pointer">
-    <td><b>${esc(x.session)}</b></td><td>${esc(x.formation)}</td><td>${esc(x.dates.join(", "))}</td>
-    <td class="n">${x.stagiaires}</td></tr>`).join("");
-  $("#admin").innerHTML = `<h2>Mode administrateur : ${idx.sessions.length} session(s)</h2>
-    <div class="tablewrap"><table><thead><tr><th>Session</th><th>Formation</th><th>Dates</th><th>Stagiaires</th></tr></thead>
-    <tbody>${rows}</tbody></table></div><p class="muted">Cliquer sur une session pour l'afficher.</p>`;
-  $("#admin").classList.remove("hidden");
-  $("#admin").querySelectorAll("tr[data-s]").forEach(tr => tr.onclick = async () => {
-    $("#msg").textContent = "Chargement…";
-    try{ render(await openSession(tr.dataset.s, code)); $("#msg").textContent = "";
-         $("#res").scrollIntoView({behavior:"smooth"}); }
-    catch{ $("#msg").textContent = "Impossible d'ouvrir cette session."; }
-  });
+  const cols = [
+    {k:"session",   t:"Session",    vals: x => [String(x.session)]},
+    {k:"formation", t:"Formation",  vals: x => [String(x.formation || "")]},
+    {k:"dates",     t:"Dates",      vals: x => x.dates.length ? x.dates.map(String) : [""]},
+    {k:"stagiaires",t:"Stagiaires", vals: x => [String(x.stagiaires)], n:true}
+  ];
+  const filt = {};                       // k -> Set des valeurs cochées (absent = tout)
+  const distinct = c => [...new Set(idx.sessions.flatMap(c.vals))]
+      .sort((a,b) => c.n ? a - b : a.localeCompare(b, "fr", {numeric:true}));
+  const visible = x => cols.every(c => !filt[c.k] || c.vals(x).some(v => filt[c.k].has(v)));
+  function draw(){
+    const list = idx.sessions.filter(visible);
+    const head = cols.map(c => `<th data-c="${c.k}"${c.n ? ' class="n"' : ""}>${c.t}${filt[c.k] ? " ●" : " ▾"}</th>`).join("");
+    const rows = list.map(x => `<tr data-s="${esc(x.session)}" style="cursor:pointer">
+      <td><b>${esc(x.session)}</b></td><td>${esc(x.formation)}</td><td>${esc(x.dates.join(", "))}</td>
+      <td class="n">${x.stagiaires}</td></tr>`).join("");
+    const nb = list.length === idx.sessions.length ? `${idx.sessions.length} session(s)` : `${list.length} / ${idx.sessions.length} session(s)`;
+    $("#admin").innerHTML = `<h2>Mode administrateur : ${nb}</h2>
+      <div class="tablewrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted">Cliquer sur un en-tête pour filtrer (Session, Formation, Dates), sur une ligne pour afficher la session.
+      ${Object.keys(filt).length ? '<a href="#" id="raz">Effacer les filtres</a>' : ""}</p>`;
+    $("#admin").classList.remove("hidden");
+    $("#admin").querySelectorAll("tr[data-s]").forEach(tr => tr.onclick = async () => {
+      $("#msg").textContent = "Chargement…";
+      try{ render(await openSession(tr.dataset.s, code)); $("#msg").textContent = "";
+           $("#res").scrollIntoView({behavior:"smooth"}); }
+      catch{ $("#msg").textContent = "Impossible d'ouvrir cette session."; }
+    });
+    $("#admin").querySelectorAll("th[data-c]").forEach(th => th.onclick = e => { e.stopPropagation(); menu(th); });
+    const raz = $("#raz"); if(raz) raz.onclick = e => { e.preventDefault(); for(const k in filt) delete filt[k]; draw(); };
+  }
+  function menu(th){
+    document.querySelectorAll(".colmenu").forEach(m => m.remove());
+    const c = cols.find(c => c.k === th.dataset.c), vals = distinct(c);
+    const cur = filt[c.k] || new Set(vals);
+    const m = document.createElement("div");
+    m.className = "colmenu";
+    m.innerHTML = `<div class="cm-top"><a href="#" data-a="all">Tout</a> · <a href="#" data-a="none">Aucun</a></div>
+      <div class="cm-list">${vals.map(v => `<label><input type="checkbox" value="${esc(v)}"${cur.has(v) ? " checked" : ""}> ${esc(v) || "(vide)"}</label>`).join("")}</div>
+      <div class="cm-bot"><button type="button" data-a="ok">Filtrer</button></div>`;
+    document.body.appendChild(m);
+    const r = th.getBoundingClientRect();
+    m.style.top = (window.scrollY + r.bottom + 4) + "px";
+    m.style.left = Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - m.offsetWidth - 8)) + "px";
+    const boxes = () => [...m.querySelectorAll("input")];
+    m.onclick = e => e.stopPropagation();
+    m.querySelectorAll("[data-a]").forEach(a => a.onclick = e => {
+      e.preventDefault();
+      const act = a.dataset.a;
+      if(act === "all") boxes().forEach(b => b.checked = true);
+      else if(act === "none") boxes().forEach(b => b.checked = false);
+      else {
+        const sel = boxes().filter(b => b.checked).map(b => b.value);
+        if(sel.length === vals.length) delete filt[c.k]; else filt[c.k] = new Set(sel);
+        m.remove(); draw();
+      }
+    });
+  }
+  document.addEventListener("click", () => document.querySelectorAll(".colmenu").forEach(m => m.remove()));
+  draw();
 }
 
 $("#f").addEventListener("submit", async e => {
